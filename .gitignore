@@ -1,2 +1,3 @@
 export/artifacts/
 .vscode/
+inference/__pycache__

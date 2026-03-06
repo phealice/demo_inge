@@ -1,3 +1,4 @@
 export/artifacts/
 .vscode/
 inference/__pycache__
+scripts.sh

@@ -1,0 +1,55 @@
+# =============================================================================
+# .dockerignore
+# =============================================================================
+# Controls what is sent to the Docker build context.
+# Excluding unnecessary files has two effects:
+#   1. Faster builds (less data sent to the daemon)
+#   2. Prevents cache invalidation caused by irrelevant file changes
+#      (e.g. editing README.md should not trigger a rebuild of the app layer)
+# =============================================================================
+
+# Git
+.git
+.gitignore
+
+# Python artifacts
+__pycache__
+*.py[cod]
+*.egg-info
+.eggs
+dist
+build
+
+# Conda / venv
+*.conda
+envs/
+.venv/
+venv/
+
+# Tests — not needed in the runtime image
+tests/
+export/
+
+# Dev tools config
+.ruff.toml
+.flake8
+.mypy.ini
+pytest.ini
+pyproject.toml
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# CI config — not needed in image
+.github/
+
+# Docs
+*.md
+*.MD
+docs/
+
+# OS
+.DS_Store
+Thumbs.db

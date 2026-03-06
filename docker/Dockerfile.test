@@ -1,0 +1,177 @@
+# =============================================================================
+# MambaVision ROS2 Inference Image
+# =============================================================================
+#
+# BUILD ARGS:
+#   ONNX_MODEL_PATH  : path to the .onnx file on the build host
+#                      default: export/artifacts/mambavision_t_1k.onnx
+#
+# BUILD EXAMPLES:
+#   # Standard x86 GPU build
+#   docker build \
+#     --build-arg ONNX_MODEL_PATH=export/artifacts/mambavision_t_1k.onnx \
+#     -t mambavision-ros:latest \
+#     -f docker/Dockerfile .
+#
+#   # With a specific model path
+#   docker build \
+#     --build-arg ONNX_MODEL_PATH=/path/to/custom.onnx \
+#     -t mambavision-ros:v1.2.3 \
+#     -f docker/Dockerfile .
+#
+# RUN EXAMPLES:
+#   # GPU
+#   docker run --gpus all mambavision-ros:v1.2.3
+#
+#   # CPU only
+#   docker run mambavision-ros:v1.2.3
+#
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# WHY THIS BASE IMAGE
+# -----------------------------------------------------------------------------
+# osrf/ros:humble-ros-base-jammy is the official minimal ROS2 Humble image
+# on Ubuntu 22.04 (Jammy). We use "ros-base" (not "desktop") because:
+#   - no GUI tools (rviz, rqt) → smaller image
+#   - ubuntu 22.04 ships Python 3.10 natively → no version conflicts
+#   - ROS2 Humble is LTS (supported until 2027)
+#
+# We do NOT use nvidia/cuda as base even though we need GPU inference because:
+#   - osrf/ros already handles the Ubuntu setup correctly for ROS2
+#   - onnxruntime-gpu bundles its own CUDA/cuDNN libraries as wheels
+#     (since ORT 1.16) → no need for a full CUDA base image for ORT alone
+#   - adding the NVIDIA container runtime (--gpus all) at docker run time
+#     injects the host CUDA drivers automatically
+#
+# JETSON NOTE:
+#   On Jetson, replace this base with:
+#   dustynv/ros:humble-ros-base-l4t-r36.2.0
+#   which is pre-built for JetPack 6.x / ARM64.
+#   The rest of the Dockerfile stays identical.
+# -----------------------------------------------------------------------------
+FROM osrf/ros:humble-ros-base-jammy
+
+# -----------------------------------------------------------------------------
+# BUILD ARG — ONNX model path on the build host
+# This is the only thing that changes between model versions.
+# The path is relative to the build context (repo root).
+# -----------------------------------------------------------------------------
+ARG ONNX_MODEL_PATH=export/artifacts/mambavision_t_1k.onnx
+
+# Fail the build immediately if the ONNX file is missing.
+# Without this, COPY would silently produce a broken image.
+RUN --mount=type=bind,source=.,target=/ctx \
+    test -f /ctx/${ONNX_MODEL_PATH} || \
+    (echo "ERROR: ONNX model not found at ${ONNX_MODEL_PATH}" && exit 1)
+
+# -----------------------------------------------------------------------------
+# SYSTEM DEPENDENCIES
+# -----------------------------------------------------------------------------
+# We install as few system packages as possible:
+#   - libgl1, libglib2.0-0 : OpenCV runtime deps (headless still needs them)
+#   - python3-pip           : pip for our Python deps
+#   - ros-humble-cv-bridge  : ROS2 ↔ OpenCV image conversion (needed by the node)
+#
+# apt-get clean + rm -rf /var/lib/apt/lists/* reduces layer size by ~50MB
+# by removing the apt package index that is not needed at runtime.
+# -----------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgl1 \
+        libglib2.0-0 \
+        python3-pip \
+        ros-humble-cv-bridge \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# -----------------------------------------------------------------------------
+# PYTHON DEPENDENCIES
+# -----------------------------------------------------------------------------
+# We copy requirements.txt BEFORE the application code.
+# Docker builds layers in order and caches them. If requirements.txt has not
+# changed, this entire layer is reused on the next build even if the code
+# changed. This is the single most impactful Docker caching optimization.
+#
+# --no-cache-dir : do not store the pip download cache inside the image
+# --upgrade pip  : avoids pip resolver bugs in older versions
+#
+# onnxruntime-gpu vs onnxruntime:
+#   onnxruntime-gpu bundles CUDA 12.x and cuDNN 9.x since ORT 1.18.
+#   It falls back to CPU automatically if no GPU is found at runtime.
+#   There is NO need to install onnxruntime AND onnxruntime-gpu — they conflict.
+#   On Jetson, replace with the ORT wheel built for JetPack from:
+#   https://elinux.org/Jetson_Zoo#ONNX_Runtime
+# -----------------------------------------------------------------------------
+WORKDIR /app
+
+
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir --upgrade pip \
+    && pip3 install --no-cache-dir -r requirements.txt
+
+# -----------------------------------------------------------------------------
+# APPLICATION CODE
+# -----------------------------------------------------------------------------
+# Copy the inference module and the ONNX model separately so that:
+#   - code changes (inference/) do not invalidate the model layer
+#   - model changes (new .onnx) do not invalidate the code layer
+# Docker layer ordering matters: put what changes least at the top.
+# -----------------------------------------------------------------------------
+COPY inference/ ./inference/
+COPY ${ONNX_MODEL_PATH} ./models/mambavision.onnx
+
+# -----------------------------------------------------------------------------
+# ROS2 WORKSPACE
+# The node code is not here yet (coming in a later step) but we set up the
+# workspace structure now so the layer is cached when we add it.
+# -----------------------------------------------------------------------------
+RUN mkdir -p /ros2_ws/src
+
+# -----------------------------------------------------------------------------
+# ENVIRONMENT VARIABLES
+# -----------------------------------------------------------------------------
+# PYTHONUNBUFFERED=1 : Python stdout/stderr are not buffered → logs appear
+#                      immediately in docker logs / ROS2 console output.
+# PYTHONDONTWRITEBYTECODE=1 : no .pyc files inside the container (cleaner).
+# MODEL_PATH : makes the model path injectable at runtime via -e if needed.
+# ORT_USE_GPU : read by infer.py to decide provider order (1=GPU, 0=CPU).
+# -----------------------------------------------------------------------------
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    MODEL_PATH=/app/models/mambavision.onnx \
+    ORT_USE_GPU=1
+
+# -----------------------------------------------------------------------------
+# NON-ROOT USER
+# -----------------------------------------------------------------------------
+# Running as root inside a container is a security risk and also causes
+# permission issues when the container writes files to a mounted host volume
+# (files are created as root on the host).
+# We create a user "appuser" with the same UID/GID as a typical Linux user
+# (1000) so that volume-mounted files have sensible permissions.
+# -----------------------------------------------------------------------------
+RUN useradd --uid 1000 --create-home appuser \
+    && chown -R appuser:appuser /app /ros2_ws
+USER appuser
+
+# -----------------------------------------------------------------------------
+# ENTRYPOINT
+# -----------------------------------------------------------------------------
+# We source the ROS2 setup in the entrypoint so that every command run in the
+# container has ROS2 available (ros2 topic list, ros2 run, etc.) without the
+# user having to source manually.
+#
+# The entrypoint uses "exec $@" to pass through any CMD or override at runtime:
+#   docker run mambavision-ros ros2 run mambavision_node infer_node
+# -----------------------------------------------------------------------------
+COPY docker/entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Default command: print ORT/CUDA info and exit (useful as a smoke test)
+CMD ["python3", "-c", "\
+import onnxruntime as ort; \
+print('ORT version:', ort.__version__); \
+print('Available providers:', ort.get_available_providers()); \
+print('Device:', ort.get_device()); \
+"]

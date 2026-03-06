@@ -50,7 +50,7 @@ class MambaVisionInference:
         if not model_path.exists():
             raise FileNotFoundError(f"ONNX model not found: {model_path}")
 
-        providers = ORT_PROVIDERS_GPU if use_gpu else ORT_PROVIDERS_CPU
+      providers = ORT_PROVIDERS_GPU if use_gpu else ORT_PROVIDERS_CPU
         log.info("Loading ONNX model from %s (providers: %s)", model_path, providers)
 
         self._labels = _load_imagenet_labels(labels_path) #image net labels 

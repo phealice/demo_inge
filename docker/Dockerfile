@@ -21,23 +21,40 @@
 #   # CPU only
 #   docker run mambavision-ros:latest
 
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu24.04 AS build_base
 
-# =============================================================================
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
 
 # -----------------------------------------------------------------------------
-# WHY osrf/ros:humble-ros-base-jammy
+# SYSTEM DEPENDENCIES & ROS JAZZY
 # -----------------------------------------------------------------------------
-# - Official OSRF image, Ubuntu 22.04 LTS, ROS2 Humble LTS (EOL 2027)
-# - "ros-base" = core ROS2 only, no GUI tools → smaller image (~400MB vs ~2GB
-#   for desktop)
-# - Python 3.10 native on Jammy → no version conflicts with our deps
-# - We do NOT use nvidia/cuda as base: onnxruntime-gpu >= 1.18 bundles its own
-#   CUDA/cuDNN libraries in the pip wheel. The NVIDIA Container Runtime
-#   (--gpus all) injects host GPU drivers at runtime — no CUDA base needed.
-# - TensorRT IS needed for trtexec. We install it via apt from the NVIDIA
-#   TensorRT repo added below. This is the only reason we need NVIDIA packages.
+# libgl1 + libglib2.0-0 : OpenCV headless runtime (no display needed)
+# python3-pip            : pip for Python deps
+# ros-humble-cv-bridge   : ROS2 ↔ OpenCV image bridge (used by the ROS node)
+# apt-get clean + rm -rf /var/lib/apt/lists/* reduces layer size by ~50MB
+# by removing the apt package index that is not needed at runtime.
 # -----------------------------------------------------------------------------
-FROM ros:jazzy-ros-base AS build_base
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+        gnupg2 \
+        lsb-release \
+    && curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+        -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) \
+        signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+        http://packages.ros.org/ros2/ubuntu \
+        $(lsb_release -cs) main" \
+        > /etc/apt/sources.list.d/ros2.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        ros-jazzy-ros-base \
+        ros-jazzy-cv-bridge \
+        python3-pip \
+        python3-venv \
+        libgl1 \
+        libglib2.0-0 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
 # BUILD ARGS
@@ -50,23 +67,6 @@ RUN --mount=type=bind,source=.,target=/ctx \
     test -f /ctx/${ONNX_MODEL_PATH} || \
     (echo "ERROR: ONNX model not found at ${ONNX_MODEL_PATH}" && exit 1)
 
-# -----------------------------------------------------------------------------
-# SYSTEM DEPENDENCIES
-# -----------------------------------------------------------------------------
-# libgl1 + libglib2.0-0 : OpenCV headless runtime (no display needed)
-# python3-pip            : pip for Python deps
-# ros-humble-cv-bridge   : ROS2 ↔ OpenCV image bridge (used by the ROS node)
-# apt-get clean + rm -rf /var/lib/apt/lists/* reduces layer size by ~50MB
-# by removing the apt package index that is not needed at runtime.
-# -----------------------------------------------------------------------------
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libgl1 \
-        libglib2.0-0 \
-        python3-pip \
-        ros-jazzy-cv-bridge \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
 
 # # -----------------------------------------------------------------------------
 # # PYTHON DEPENDENCIES
@@ -90,8 +90,13 @@ COPY requirements.txt .
 
 FROM build_base AS debug
 
+ENV VIRTUAL_ENV=/app/venv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
+RUN python3 -m venv $VIRTUAL_ENV \
+    && pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
 # -----------------------------------------------------------------------------
 # APPLICATION CODE + MODEL
 # -----------------------------------------------------------------------------
@@ -101,7 +106,7 @@ RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 # Layers ordered from least-frequently-changed to most-frequently-changed.
 # -----------------------------------------------------------------------------
 COPY inference/ ./inference/
-COPY ${ONNX_MODEL_PATH} ./models/mambavision.onnx
+COPY export/artifacts/ ./models/
 
 # ROS2 workspace skeleton (populated when ROS node is added later)
 RUN mkdir -p /ros2_ws/src
@@ -142,5 +147,3 @@ ENTRYPOINT ["/entrypoint.sh"]
 # print('Available providers:', ort.get_available_providers()); \
 # print('Active device   :', ort.get_device()); \
 # "]
-
-CMD ["bash"]

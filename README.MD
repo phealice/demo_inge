@@ -21,3 +21,20 @@ The goal is to write a short demo of a Mamba deployement through Docker-ROS imag
 - [x] Mamba vision to onnx
 - [ ] Complete the Readme
     - [ ] Write the chunks
+
+
+## Execution 
+En local windows -> jetson (arm64)
+docker buildx build \
+  --platform linux/arm64 \
+  --target debug \
+  --build-arg ONNX_MODEL_PATH=export/artifacts/mambavision_t_1k.onnx \
+  -t mambavision-ros:latest \
+  -f docker/Dockerfile .
+
+else 
+docker build \
+--target debug \
+--build-arg ONNX_MODEL_PATH=export/artifacts/mambavision_t_1k.onnx \
+-t mambavision-ros:latest \
+-f docker/Dockerfile .

@@ -23,9 +23,20 @@ transform = create_transform(input_size=input_resolution,
 
 inputs = transform(image).unsqueeze(0).cuda()
 # model inference
-dummy_input = torch.randn(1, 3, 224, 224).cuda()
+# dummy_input = torch.randn(1, 3, 224, 224).cuda()
 
-outputs = model(dummy_input)
+outputs = model(inputs)
 logits = outputs['logits'] 
 predicted_class_idx = logits.argmax(-1).item()
 print("Predicted class:", model.config.id2label[predicted_class_idx])
+
+
+### 
+import numpy as np
+logits = logits.detach().cpu().numpy()[0]
+print(logits)
+indices = np.argsort(logits)[::-1][:5]
+print([(int(i), float(logits[i])) for i in indices])
+
+
+

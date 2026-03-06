@@ -13,3 +13,10 @@ ONNX_OUTPUT_NAME = "logits"
 #ORT_PROVIDERS_GPU = ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]
 ORT_PROVIDERS_GPU = ["CUDAExecutionProvider", "CPUExecutionProvider"]
 ORT_PROVIDERS_CPU = ["CPUExecutionProvider"]
+
+# COCO 
+IMAGENET_PATH = "inference/imagenet_class_index.json"
+IMAGENET_LABELS_URL = (
+    "https://storage.googleapis.com/download.tensorflow.org"
+    "/data/imagenet_class_index.json"
+)

@@ -1,4 +1,4 @@
-
+[![GitHub Actions Demo](https://github.com/phealice/demo_inge/actions/workflows/github-actions-demo.yml/badge.svg)](https://github.com/phealice/demo_inge/actions/workflows/github-actions-demo.yml)
 
 ## Overview
 The goal is to write a short demo of a Mamba deployement through Docker-ROS image.
